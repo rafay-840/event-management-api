@@ -11,11 +11,12 @@ a background job or a test without going through FastAPI.
 
 from collections.abc import Sequence
 
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models import Event
-from schemas import EventCreate, EventUpdate
+from models import Event, Registration
+from schemas import EventCreate, EventUpdate, RegistrationCreate
 
 # ---------------------------------------------------------------------------
 # Domain exceptions
@@ -43,6 +44,36 @@ class EventNotFoundError(NotFoundError):
 
     def __init__(self, event_id: int) -> None:
         super().__init__(f"Event with id {event_id} not found")
+
+
+class RegistrationNotFoundError(NotFoundError):
+    """Raised when no registration has the given id."""
+
+    def __init__(self, registration_id: int) -> None:
+        super().__init__(f"Registration with id {registration_id} not found")
+
+
+class DuplicateRegistrationError(ConflictError):
+    """Raised when an employee tries to register twice for the same event."""
+
+    def __init__(self, email: str, event_id: int) -> None:
+        super().__init__(f"{email} is already registered for event {event_id}")
+
+
+class EventFullError(ConflictError):
+    """Raised when an event has no seats left."""
+
+    def __init__(self, event_id: int, capacity: int) -> None:
+        super().__init__(f"Event {event_id} is full (maximum capacity {capacity})")
+
+
+class CapacityBelowRegistrationsError(ConflictError):
+    """Raised when an update would set capacity below the seats already taken."""
+
+    def __init__(self, new_capacity: int, registered: int) -> None:
+        super().__init__(
+            f"max_capacity cannot be {new_capacity}: {registered} employees are already registered"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -75,11 +106,27 @@ async def get_event(db: AsyncSession, event_id: int) -> Event:
 
 
 async def update_event(db: AsyncSession, event_id: int, data: EventUpdate) -> Event:
-    """Apply a partial update: only fields the client actually sent change."""
-    event = await get_event(db, event_id)
+    """Apply a partial update: only fields the client actually sent change.
+
+    Capacity cannot drop below the number of employees already registered,
+    otherwise the event would be over-booked.
+    """
+    # Lock the row (SELECT ... FOR UPDATE) so a registration cannot slip in
+    # between the capacity check and the commit.
+    event = await db.get(Event, event_id, with_for_update=True)
+    if event is None:
+        raise EventNotFoundError(event_id)
+
     # ``exclude_unset`` drops fields the client did not send, so they keep
     # their current value instead of being overwritten with ``None``.
-    for field, value in data.model_dump(exclude_unset=True).items():
+    changes = data.model_dump(exclude_unset=True)
+    if "max_capacity" in changes:
+        registered = await count_registrations(db, event_id)
+        if changes["max_capacity"] < registered:
+            await db.rollback()  # releases the row lock
+            raise CapacityBelowRegistrationsError(changes["max_capacity"], registered)
+
+    for field, value in changes.items():
         setattr(event, field, value)
     await db.commit()
     await db.refresh(event)
@@ -87,7 +134,84 @@ async def update_event(db: AsyncSession, event_id: int, data: EventUpdate) -> Ev
 
 
 async def delete_event(db: AsyncSession, event_id: int) -> None:
-    """Delete an event or raise ``EventNotFoundError``."""
+    """Delete an event (and, via ON DELETE CASCADE, its registrations)."""
     event = await get_event(db, event_id)
     await db.delete(event)
+    await db.commit()
+
+
+# ---------------------------------------------------------------------------
+# Registrations
+# ---------------------------------------------------------------------------
+
+
+async def count_registrations(db: AsyncSession, event_id: int) -> int:
+    """Return how many employees are registered for an event."""
+    query = select(func.count(Registration.id)).where(Registration.event_id == event_id)
+    return await db.scalar(query) or 0
+
+
+async def register_for_event(
+    db: AsyncSession, event_id: int, data: RegistrationCreate
+) -> Registration:
+    """Register an employee for an event, enforcing the three business rules.
+
+    1. The event must exist                         -> ``EventNotFoundError`` (404)
+    2. The employee must not already be registered  -> ``DuplicateRegistrationError`` (409)
+    3. The event must have a free seat              -> ``EventFullError`` (409)
+
+    Concurrency: two employees could request the last seat at the same time.
+    Without care, both would read "1 seat left" and both would be inserted.
+    ``SELECT ... FOR UPDATE`` locks the event row, so concurrent registrations
+    for the *same* event run one after another and each sees the real count.
+    """
+    capacity = await db.scalar(
+        select(Event.max_capacity).where(Event.id == event_id).with_for_update()
+    )
+    if capacity is None:
+        raise EventNotFoundError(event_id)
+
+    already_registered = await db.scalar(
+        select(Registration.id).where(
+            Registration.event_id == event_id,
+            Registration.employee_email == data.employee_email,
+        )
+    )
+    if already_registered is not None:
+        await db.rollback()
+        raise DuplicateRegistrationError(data.employee_email, event_id)
+
+    if await count_registrations(db, event_id) >= capacity:
+        await db.rollback()
+        raise EventFullError(event_id, capacity)
+
+    registration = Registration(event_id=event_id, **data.model_dump())
+    db.add(registration)
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        # Safety net: the UNIQUE(event_id, employee_email) constraint fired.
+        await db.rollback()
+        raise DuplicateRegistrationError(data.employee_email, event_id) from exc
+    await db.refresh(registration)
+    return registration
+
+
+async def list_registrations(db: AsyncSession, event_id: int) -> Sequence[Registration]:
+    """Return the registrations of an existing event, oldest first."""
+    await get_event(db, event_id)  # raises 404 for an unknown event
+    query = (
+        select(Registration)
+        .where(Registration.event_id == event_id)
+        .order_by(Registration.registered_at, Registration.id)
+    )
+    return (await db.scalars(query)).all()
+
+
+async def cancel_registration(db: AsyncSession, registration_id: int) -> None:
+    """Cancel (delete) a registration, freeing its seat."""
+    registration = await db.get(Registration, registration_id)
+    if registration is None:
+        raise RegistrationNotFoundError(registration_id)
+    await db.delete(registration)
     await db.commit()
