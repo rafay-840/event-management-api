@@ -13,7 +13,16 @@ If a request body breaks any rule below, FastAPI answers with
 from datetime import datetime, timezone
 from typing import Annotated, Self
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -107,8 +116,48 @@ class EventResponse(BaseModel):
     event_date: datetime
     location: str
     max_capacity: int
+    registration_count: int = Field(description="Seats already taken.")
     created_at: datetime
     updated_at: datetime
+
+    @computed_field(description="Seats still free.")  # type: ignore[prop-decorator]
+    @property
+    def available_seats(self) -> int:
+        """Remaining capacity; never negative."""
+        return max(self.max_capacity - self.registration_count, 0)
+
+
+# ---------------------------------------------------------------------------
+# Registrations
+# ---------------------------------------------------------------------------
+
+
+class RegistrationCreate(StrictModel):
+    """Request body for ``POST /events/{id}/registrations``.
+
+    The employee is identified by e-mail, which must be a valid address.
+    """
+
+    employee_name: str = Field(min_length=1, max_length=120, examples=["Ana Rossi"])
+    employee_email: EmailStr = Field(examples=["ana.rossi@acme.com"])
+
+    @field_validator("employee_email")
+    @classmethod
+    def _lowercase_email(cls, value: str) -> str:
+        """Store e-mails in lower case so duplicates are detected reliably."""
+        return value.lower()
+
+
+class RegistrationResponse(BaseModel):
+    """A registration as returned by the API."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    event_id: int
+    employee_name: str
+    employee_email: str
+    registered_at: datetime
 
 
 class ErrorResponse(BaseModel):
