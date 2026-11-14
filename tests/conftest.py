@@ -10,7 +10,7 @@ Isolation: every test gets freshly created, empty tables, and the app's
 
 import os
 from collections.abc import AsyncIterator, Awaitable, Callable
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -37,7 +37,7 @@ TEST_USER = {"email": "tester@acme.com", "full_name": "Test User", "password": "
 
 def future_date(days: int = 30, hour: int = 10) -> str:
     """Return an ISO datetime ``days`` from now (UTC), always in the future."""
-    moment = datetime.now(timezone.utc) + timedelta(days=days)
+    moment = datetime.now(UTC) + timedelta(days=days)
     return moment.replace(hour=hour, minute=0, second=0, microsecond=0).isoformat()
 
 

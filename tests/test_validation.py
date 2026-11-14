@@ -24,7 +24,9 @@ from tests.conftest import future_date
 async def test_create_event_rejects_invalid_data(
     client, auth_headers, event_payload, override, reason
 ):
-    response = await client.post("/events", json={**event_payload, **override}, headers=auth_headers)
+    response = await client.post(
+        "/events", json={**event_payload, **override}, headers=auth_headers
+    )
     assert response.status_code == 422, reason
 
 

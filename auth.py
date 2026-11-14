@@ -16,7 +16,7 @@ Because the token is signed, the server does not need to store sessions:
 it can trust the user id inside a token whose signature is valid.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 import bcrypt
@@ -65,7 +65,7 @@ DUMMY_PASSWORD_HASH = hash_password("dummy-password-for-timing")
 
 def create_access_token(user_id: int) -> str:
     """Create a signed JWT that identifies ``user_id`` and expires later."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     payload = {
         "sub": str(user_id),  # "subject": who the token is about (must be a string)
         "iat": now,  # issued at

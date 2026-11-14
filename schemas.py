@@ -10,7 +10,7 @@ If a request body breaks any rule below, FastAPI answers with
 ``422 Unprocessable Entity`` before our code even runs.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Annotated, Self
 
 from pydantic import (
@@ -42,8 +42,8 @@ def validate_event_date(value: datetime) -> datetime:
     so that every value stored in the database is unambiguous.
     """
     if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    if value <= datetime.now(timezone.utc):
+        value = value.replace(tzinfo=UTC)
+    if value <= datetime.now(UTC):
         raise ValueError("event_date must be in the future")
     return value
 

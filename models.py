@@ -58,9 +58,7 @@ class Event(TimestampMixin, Base):
     __tablename__ = "events"
     # The database enforces the capacity rule too, as a last line of defence
     # behind the Pydantic validation.
-    __table_args__ = (
-        CheckConstraint("max_capacity > 0", name="ck_events_max_capacity_positive"),
-    )
+    __table_args__ = (CheckConstraint("max_capacity > 0", name="ck_events_max_capacity_positive"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     title: Mapped[str] = mapped_column(String(200), index=True)
@@ -96,9 +94,7 @@ class Registration(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    event_id: Mapped[int] = mapped_column(
-        ForeignKey("events.id", ondelete="CASCADE"), index=True
-    )
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"), index=True)
     employee_name: Mapped[str] = mapped_column(String(120))
     # Stored in lower case (see schemas.py) so "Ana@Acme.com" == "ana@acme.com".
     employee_email: Mapped[str] = mapped_column(String(254))
