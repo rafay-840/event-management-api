@@ -9,6 +9,7 @@ Keeping HTTP out of this layer means the same rules can be reused from a CLI,
 a background job or a test without going through FastAPI.
 """
 
+import asyncio
 from collections.abc import Sequence
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
@@ -113,11 +114,10 @@ async def create_user(db: AsyncSession, data: UserCreate) -> User:
     if await get_user_by_email(db, data.email) is not None:
         raise EmailAlreadyRegisteredError(data.email)
 
-    user = User(
-        email=data.email,
-        full_name=data.full_name,
-        hashed_password=hash_password(data.password),
-    )
+    # bcrypt is CPU-heavy (~0.2 s by design). Running it in a worker thread
+    # keeps the event loop free to serve other requests meanwhile.
+    hashed = await asyncio.to_thread(hash_password, data.password)
+    user = User(email=data.email, full_name=data.full_name, hashed_password=hashed)
     db.add(user)
     try:
         await db.commit()
@@ -136,7 +136,7 @@ async def authenticate_user(db: AsyncSession, email: str, password: str) -> User
     """
     user = await get_user_by_email(db, email)
     stored_hash = user.hashed_password if user else DUMMY_PASSWORD_HASH
-    password_ok = verify_password(password, stored_hash)
+    password_ok = await asyncio.to_thread(verify_password, password, stored_hash)
     if user is None or not password_ok:
         raise InvalidCredentialsError()
     return user
