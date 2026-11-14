@@ -1,0 +1,10 @@
+# Code-style configuration for ruff (linter + formatter).
+#   ruff check .     -> lint
+#   ruff format .    -> format (Black-compatible)
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+# pycodestyle, pyflakes, isort, bugbear, pyupgrade, pep8-naming, simplify
+select = ["E", "F", "W", "I", "B", "UP", "N", "SIM"]

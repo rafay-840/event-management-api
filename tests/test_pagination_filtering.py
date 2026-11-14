@@ -1,6 +1,6 @@
 """Tests for pagination (skip/limit) and search/filtering (title, date)."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -70,7 +70,7 @@ async def test_title_filter_treats_wildcards_literally(client, create_event):
 
 
 async def test_date_filter(client, create_event):
-    target = (datetime.now(timezone.utc) + timedelta(days=10)).date()
+    target = (datetime.now(UTC) + timedelta(days=10)).date()
     on_day_morning = await create_event(title="Morning", event_date=f"{target}T00:00:00Z")
     on_day_evening = await create_event(title="Evening", event_date=f"{target}T23:59:00Z")
     await create_event(title="Next day", event_date=f"{target + timedelta(days=1)}T00:00:00Z")
@@ -81,7 +81,7 @@ async def test_date_filter(client, create_event):
 
 
 async def test_date_filter_respects_configured_time_zone(client, create_event):
-    target = (datetime.now(timezone.utc) + timedelta(days=10)).date()
+    target = (datetime.now(UTC) + timedelta(days=10)).date()
     # 23:30 UTC is already the next day in Rome (UTC+1 in winter, +2 in summer).
     await create_event(title="Late UTC", event_date=f"{target}T23:30:00Z")
 
@@ -94,7 +94,7 @@ async def test_date_filter_respects_configured_time_zone(client, create_event):
 
 
 async def test_filters_combine_with_each_other_and_pagination(client, create_event):
-    target = (datetime.now(timezone.utc) + timedelta(days=7)).date()
+    target = (datetime.now(UTC) + timedelta(days=7)).date()
     for hour in (9, 11, 13):
         await create_event(title=f"Python {hour}", event_date=f"{target}T{hour:02d}:00:00Z")
     await create_event(title="Yoga", event_date=f"{target}T10:00:00Z")

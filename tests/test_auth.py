@@ -1,6 +1,6 @@
 """Tests for sign-up, login and token validation."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import jwt
 
@@ -75,7 +75,7 @@ async def test_malformed_token_returns_401(client):
 
 async def test_expired_token_returns_401(client, auth_headers):
     expired = jwt.encode(
-        {"sub": "1", "exp": datetime.now(timezone.utc) - timedelta(minutes=1)},
+        {"sub": "1", "exp": datetime.now(UTC) - timedelta(minutes=1)},
         settings.jwt_secret_key,
         algorithm=settings.jwt_algorithm,
     )
@@ -85,7 +85,7 @@ async def test_expired_token_returns_401(client, auth_headers):
 
 async def test_token_signed_with_other_secret_returns_401(client, auth_headers):
     forged = jwt.encode(
-        {"sub": "1", "exp": datetime.now(timezone.utc) + timedelta(minutes=5)},
+        {"sub": "1", "exp": datetime.now(UTC) + timedelta(minutes=5)},
         "attacker-secret-that-is-long-enough-for-hs256",
         algorithm="HS256",
     )

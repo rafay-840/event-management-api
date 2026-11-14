@@ -85,7 +85,10 @@ RegistrationId = Annotated[int, Path(gt=0, description="The registration's uniqu
 NOT_FOUND = {status.HTTP_404_NOT_FOUND: {"model": ErrorResponse, "description": "Not found"}}
 CONFLICT = {status.HTTP_409_CONFLICT: {"model": ErrorResponse, "description": "Conflict"}}
 UNAUTHORIZED = {
-    status.HTTP_401_UNAUTHORIZED: {"model": ErrorResponse, "description": "Missing or invalid token"}
+    status.HTTP_401_UNAUTHORIZED: {
+        "model": ErrorResponse,
+        "description": "Missing or invalid token",
+    }
 }
 
 # Pagination parameters shared by every list endpoint.
@@ -316,9 +319,7 @@ async def list_registrations(
 
     The total number of registrations is sent in the `X-Total-Count` header.
     """
-    registrations, total = await services.list_registrations(
-        db, event_id, skip=skip, limit=limit
-    )
+    registrations, total = await services.list_registrations(db, event_id, skip=skip, limit=limit)
     response.headers[TOTAL_COUNT_HEADER] = str(total)
     return registrations
 
