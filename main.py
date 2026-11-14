@@ -23,7 +23,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import services
 from db import get_db, init_db
-from schemas import ErrorResponse, EventCreate, EventResponse, EventUpdate
+from schemas import (
+    ErrorResponse,
+    EventCreate,
+    EventResponse,
+    EventUpdate,
+    RegistrationCreate,
+    RegistrationResponse,
+)
 
 
 @asynccontextmanager
@@ -35,6 +42,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 TAGS_METADATA = [
     {"name": "Events", "description": "Create, read, update and delete company events."},
+    {"name": "Registrations", "description": "Register employees for events and cancel seats."},
 ]
 
 app = FastAPI(
@@ -51,9 +59,11 @@ app = FastAPI(
 # Shorthand types used in route signatures.
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 EventId = Annotated[int, Path(gt=0, description="The event's unique id.")]
+RegistrationId = Annotated[int, Path(gt=0, description="The registration's unique id.")]
 
 # Documented error responses, reused by several routes in the OpenAPI schema.
 NOT_FOUND = {status.HTTP_404_NOT_FOUND: {"model": ErrorResponse, "description": "Not found"}}
+CONFLICT = {status.HTTP_409_CONFLICT: {"model": ErrorResponse, "description": "Conflict"}}
 
 
 # ---------------------------------------------------------------------------
@@ -111,12 +121,15 @@ async def get_event(event_id: EventId, db: DbSession) -> EventResponse:
 @app.put(
     "/events/{event_id}",
     response_model=EventResponse,
-    responses=NOT_FOUND,
+    responses={**NOT_FOUND, **CONFLICT},
     tags=["Events"],
     summary="Update an event",
 )
 async def update_event(event_id: EventId, payload: EventUpdate, db: DbSession) -> EventResponse:
-    """Update an event. Only the fields included in the body are changed."""
+    """Update an event. Only the fields included in the body are changed.
+
+    Returns 409 if `max_capacity` would drop below the seats already taken.
+    """
     return await services.update_event(db, event_id, payload)
 
 
@@ -128,5 +141,53 @@ async def update_event(event_id: EventId, payload: EventUpdate, db: DbSession) -
     summary="Delete an event",
 )
 async def delete_event(event_id: EventId, db: DbSession) -> None:
-    """Delete an event. Returns 204 with an empty body on success."""
+    """Delete an event and all its registrations. Returns 204 with an empty body."""
     await services.delete_event(db, event_id)
+
+
+# ---------------------------------------------------------------------------
+# Registrations
+# ---------------------------------------------------------------------------
+
+
+@app.post(
+    "/events/{event_id}/registrations",
+    response_model=RegistrationResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses={**NOT_FOUND, **CONFLICT},
+    tags=["Registrations"],
+    summary="Register for an event",
+)
+async def register_for_event(
+    event_id: EventId, payload: RegistrationCreate, db: DbSession
+) -> RegistrationResponse:
+    """Register an employee for an event.
+
+    * **404** if the event does not exist
+    * **409** if the employee is already registered, or the event is full
+    """
+    return await services.register_for_event(db, event_id, payload)
+
+
+@app.get(
+    "/events/{event_id}/registrations",
+    response_model=list[RegistrationResponse],
+    responses=NOT_FOUND,
+    tags=["Registrations"],
+    summary="List an event's registrations",
+)
+async def list_registrations(event_id: EventId, db: DbSession) -> list[RegistrationResponse]:
+    """Return everyone registered for the event, in registration order."""
+    return await services.list_registrations(db, event_id)
+
+
+@app.delete(
+    "/registrations/{registration_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses=NOT_FOUND,
+    tags=["Registrations"],
+    summary="Cancel a registration",
+)
+async def cancel_registration(registration_id: RegistrationId, db: DbSession) -> None:
+    """Cancel a registration, freeing one seat. Returns 204 on success."""
+    await services.cancel_registration(db, registration_id)
