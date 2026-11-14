@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Acme Events</title>
+<link rel="icon" href="data:,">
+<!--
+  Minimal demo frontend for the Corporate Event Management API.
+  Plain HTML/CSS/JavaScript, no build step. It is served by FastAPI at /app,
+  so it calls the API on the same origin (no CORS configuration needed).
+-->
+<style>
+  :root { --ink:#1d2433; --muted:#667085; --line:#e4e7ec; --bg:#f7f8fa; --accent:#2f5bea; --danger:#c4320a; --ok:#067647; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; color:var(--ink); background:var(--bg); }
+  header { background:#fff; border-bottom:1px solid var(--line); padding:14px 24px; display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
+  header h1 { font-size:18px; margin:0; flex:1; }
+  main { max-width:1100px; margin:24px auto; padding:0 24px; display:grid; grid-template-columns: 1fr 360px; gap:24px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:18px; }
+  .card h2 { font-size:15px; margin:0 0 12px; }
+  label { display:block; font-size:12px; color:var(--muted); margin:8px 0 2px; }
+  input, textarea { width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:6px; font:inherit; }
+  button { font:inherit; border:1px solid var(--line); background:#fff; border-radius:6px; padding:7px 12px; cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.danger { color:var(--danger); }
+  button:disabled { opacity:.5; cursor:default; }
+  .row { display:flex; gap:8px; align-items:end; flex-wrap:wrap; }
+  .row > * { flex:1; }
+  .event { border-top:1px solid var(--line); padding:14px 0; }
+  .event:first-child { border-top:0; }
+  .event h3 { margin:0; font-size:16px; }
+  .meta { color:var(--muted); font-size:13px; }
+  .seats { font-size:12px; padding:2px 8px; border-radius:99px; background:#ecfdf3; color:var(--ok); white-space:nowrap; }
+  .seats.full { background:#fef3f2; color:var(--danger); }
+  .actions { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; }
+  .regs { margin-top:10px; padding:10px; background:var(--bg); border-radius:8px; font-size:13px; }
+  .regs li { display:flex; justify-content:space-between; gap:8px; padding:3px 0; }
+  #toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); padding:10px 16px; border-radius:8px; color:#fff; display:none; max-width:90%; }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Acme Corp · Events</h1>
+  <span id="whoami" class="meta">Not logged in (browsing is public)</span>
+  <button id="logoutBtn" class="hidden">Log out</button>
+  <a href="/docs" target="_blank" class="meta">API docs ↗</a>
+</header>
+
+<main>
+  <section class="card">
+    <div class="row">
+      <div><label for="fTitle">Search title</label><input id="fTitle" placeholder="e.g. python"></div>
+      <div><label for="fDate">On date</label><input id="fDate" type="date"></div>
+      <button id="searchBtn">Search</button>
+    </div>
+    <div id="events" style="margin-top:12px"></div>
+    <div class="row" style="margin-top:12px; align-items:center">
+      <button id="prevBtn">← Previous</button>
+      <span id="pageInfo" class="meta" style="text-align:center"></span>
+      <button id="nextBtn">Next →</button>
+    </div>
+  </section>
+
+  <aside>
+    <section class="card" id="authCard">
+      <h2>Log in to manage events</h2>
+      <label for="email">E-mail</label><input id="email" type="email" autocomplete="username">
+      <label for="password">Password</label><input id="password" type="password" autocomplete="current-password">
+      <label for="fullName">Full name (sign-up only)</label><input id="fullName">
+      <div class="actions"><button class="primary" id="loginBtn">Log in</button><button id="signupBtn">Sign up</button></div>
+    </section>
+
+    <section class="card hidden" id="formCard" style="margin-top:16px">
+      <h2 id="formTitle">New event</h2>
+      <input type="hidden" id="editId">
+      <label for="eTitle">Title</label><input id="eTitle">
+      <label for="eDesc">Description</label><textarea id="eDesc" rows="2"></textarea>
+      <label for="eDate">Date &amp; time</label><input id="eDate" type="datetime-local">
+      <label for="eLoc">Location</label><input id="eLoc">
+      <label for="eCap">Maximum capacity</label><input id="eCap" type="number" min="1">
+      <div class="actions"><button class="primary" id="saveBtn">Save</button><button id="cancelEditBtn">Clear</button></div>
+    </section>
+  </aside>
+</main>
+
+<div id="toast"></div>
+
+<script>
+const PAGE_SIZE = 5;
+const state = { token: sessionStorage.getItem("token"), skip: 0, total: 0 };
+const $ = (id) => document.getElementById(id);
+
+/** Show a short message at the bottom of the screen. */
+function toast(message, isError = false) {
+  const el = $("toast");
+  el.textContent = message;
+  el.style.background = isError ? "var(--danger)" : "var(--ok)";
+  el.style.display = "block";
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => (el.style.display = "none"), 3500);
+}
+
+/** Turn FastAPI's error body (string or 422 list) into readable text. */
+function errorText(body) {
+  if (!body || !body.detail) return "Request failed";
+  if (typeof body.detail === "string") return body.detail;
+  return body.detail.map((e) => `${e.loc.slice(1).join(".")}: ${e.msg}`).join("; ");
+}
+
+/** Call the API; adds the Bearer token and throws on non-2xx responses. */
+async function api(path, { method = "GET", json, form } = {}) {
+  const headers = {};
+  let body;
+  if (json !== undefined) { headers["Content-Type"] = "application/json"; body = JSON.stringify(json); }
+  if (form) body = new URLSearchParams(form);
+  if (state.token) headers.Authorization = `Bearer ${state.token}`;
+  const res = await fetch(path, { method, headers, body });
+  const data = res.status === 204 ? null : await res.json().catch(() => null);
+  if (res.status === 401 && state.token) setToken(null);
+  if (!res.ok) throw new Error(`${res.status} · ${errorText(data)}`);
+  return { data, res };
+}
+
+function escapeHtml(text) {
+  return String(text ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
+}
+
+async function setToken(token) {
+  state.token = token;
+  token ? sessionStorage.setItem("token", token) : sessionStorage.removeItem("token");
+  $("authCard").classList.toggle("hidden", !!token);
+  $("formCard").classList.toggle("hidden", !token);
+  $("logoutBtn").classList.toggle("hidden", !token);
+  $("whoami").textContent = "Not logged in (browsing is public)";
+  if (token) {
+    try { const { data } = await api("/auth/me"); $("whoami").textContent = `Logged in as ${data.full_name}`; }
+    catch { /* expired token: api() already logged us out */ }
+  }
+  loadEvents();
+}
+
+async function loadEvents() {
+  const params = new URLSearchParams({ skip: state.skip, limit: PAGE_SIZE });
+  if ($("fTitle").value.trim()) params.set("title", $("fTitle").value.trim());
+  if ($("fDate").value) params.set("date", $("fDate").value);
+  try {
+    const { data, res } = await api(`/events?${params}`);
+    state.total = Number(res.headers.get("X-Total-Count") || 0);
+    renderEvents(data);
+  } catch (err) { toast(err.message, true); }
+}
+
+function renderEvents(events) {
+  const loggedIn = !!state.token;
+  $("events").innerHTML = events.length ? events.map((e) => `
+    <div class="event" data-id="${e.id}">
+      <div class="row" style="align-items:start">
+        <div><h3>${escapeHtml(e.title)}</h3>
+          <div class="meta">${new Date(e.event_date).toLocaleString()} · ${escapeHtml(e.location)}</div></div>
+        <span style="flex:0" class="seats ${e.available_seats ? "" : "full"}">${e.available_seats}/${e.max_capacity} seats left</span>
+      </div>
+      ${e.description ? `<div style="margin-top:6px">${escapeHtml(e.description)}</div>` : ""}
+      <div class="actions">
+        <button data-act="regs">Registrations (${e.registration_count})</button>
+        ${loggedIn ? `<button data-act="edit">Edit</button><button data-act="delete" class="danger">Delete</button>` : ""}
+      </div>
+      <div class="regs hidden"></div>
+    </div>`).join("") : `<p class="meta">No events found.</p>`;
+  state.events = Object.fromEntries(events.map((e) => [e.id, e]));
+  const page = Math.floor(state.skip / PAGE_SIZE) + 1;
+  const pages = Math.max(1, Math.ceil(state.total / PAGE_SIZE));
+  $("pageInfo").textContent = `Page ${page} of ${pages} · ${state.total} event(s)`;
+  $("prevBtn").disabled = state.skip === 0;
+  $("nextBtn").disabled = state.skip + PAGE_SIZE >= state.total;
+}
+
+async function showRegistrations(eventEl) {
+  const id = eventEl.dataset.id;
+  const box = eventEl.querySelector(".regs");
+  try {
+    const { data } = await api(`/events/${id}/registrations?limit=100`);
+    box.innerHTML = `
+      <ul style="list-style:none;margin:0;padding:0">${data.map((r) => `
+        <li><span>${escapeHtml(r.employee_name)} · <span class="meta">${escapeHtml(r.employee_email)}</span></span>
+        <button class="danger" data-cancel="${r.id}">Cancel</button></li>`).join("") || `<li class="meta">Nobody yet.</li>`}</ul>
+      <div class="row" style="margin-top:8px">
+        <input placeholder="Name" class="rName"><input placeholder="email@acme.com" class="rEmail">
+        <button class="primary" data-act="register" style="flex:0">Register</button>
+      </div>`;
+    box.classList.remove("hidden");
+  } catch (err) { toast(err.message, true); }
+}
+
+function fillForm(e) {
+  $("editId").value = e ? e.id : "";
+  $("formTitle").textContent = e ? `Edit event #${e.id}` : "New event";
+  $("eTitle").value = e ? e.title : "";
+  $("eDesc").value = e ? e.description || "" : "";
+  // datetime-local wants "YYYY-MM-DDTHH:MM" in local time.
+  $("eDate").value = e ? new Date(new Date(e.event_date).getTime() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16) : "";
+  $("eLoc").value = e ? e.location : "";
+  $("eCap").value = e ? e.max_capacity : "";
+}
+
+// ---- Event wiring --------------------------------------------------------
+
+$("events").addEventListener("click", async (ev) => {
+  const btn = ev.target.closest("button");
+  if (!btn) return;
+  const eventEl = btn.closest(".event");
+  const id = eventEl.dataset.id;
+  try {
+    if (btn.dataset.act === "regs") return showRegistrations(eventEl);
+    if (btn.dataset.act === "edit") return fillForm(state.events[id]);
+    if (btn.dataset.act === "delete") {
+      await api(`/events/${id}`, { method: "DELETE" });
+      toast("Event deleted"); return loadEvents();
+    }
+    if (btn.dataset.act === "register") {
+      await api(`/events/${id}/registrations`, { method: "POST", json: {
+        employee_name: eventEl.querySelector(".rName").value,
+        employee_email: eventEl.querySelector(".rEmail").value } });
+      toast("Registered!"); await loadEvents();
+      return showRegistrations($("events").querySelector(`[data-id="${id}"]`));
+    }
+    if (btn.dataset.cancel) {
+      await api(`/registrations/${btn.dataset.cancel}`, { method: "DELETE" });
+      toast("Registration cancelled"); await loadEvents();
+      return showRegistrations($("events").querySelector(`[data-id="${id}"]`));
+    }
+  } catch (err) { toast(err.message, true); }
+});
+
+$("saveBtn").addEventListener("click", async () => {
+  const id = $("editId").value;
+  const payload = {
+    title: $("eTitle").value,
+    description: $("eDesc").value || null,
+    event_date: $("eDate").value ? new Date($("eDate").value).toISOString() : null,
+    location: $("eLoc").value,
+    max_capacity: Number($("eCap").value),
+  };
+  try {
+    await api(id ? `/events/${id}` : "/events", { method: id ? "PUT" : "POST", json: payload });
+    toast(id ? "Event updated" : "Event created"); fillForm(null); loadEvents();
+  } catch (err) { toast(err.message, true); }
+});
+
+$("loginBtn").addEventListener("click", async () => {
+  try {
+    const { data } = await api("/auth/login", { method: "POST", form: { username: $("email").value, password: $("password").value } });
+    toast("Logged in"); setToken(data.access_token);
+  } catch (err) { toast(err.message, true); }
+});
+
+$("signupBtn").addEventListener("click", async () => {
+  try {
+    await api("/auth/register", { method: "POST", json: { email: $("email").value, password: $("password").value, full_name: $("fullName").value } });
+    toast("Account created, now log in");
+  } catch (err) { toast(err.message, true); }
+});
+
+$("logoutBtn").addEventListener("click", () => setToken(null));
+$("cancelEditBtn").addEventListener("click", () => fillForm(null));
+$("searchBtn").addEventListener("click", () => { state.skip = 0; loadEvents(); });
+$("prevBtn").addEventListener("click", () => { state.skip = Math.max(0, state.skip - PAGE_SIZE); loadEvents(); });
+$("nextBtn").addEventListener("click", () => { state.skip += PAGE_SIZE; loadEvents(); });
+
+setToken(state.token);
+</script>
+</body>
+</html>

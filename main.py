@@ -20,11 +20,13 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import date
+from pathlib import Path as FilePath
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Path, Query, Request, Response, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.security import OAuth2PasswordRequestForm
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import services
@@ -126,9 +128,9 @@ async def conflict_handler(_: Request, exc: services.ConflictError) -> JSONRespo
 
 
 @app.get("/", include_in_schema=False)
-async def root() -> dict[str, str]:
-    """Small landing response pointing to the documentation."""
-    return {"message": "Corporate Event Management API", "docs": "/docs"}
+async def root() -> RedirectResponse:
+    """Send visitors of the bare URL to the demo frontend."""
+    return RedirectResponse(url="/app/")
 
 
 @app.post(
@@ -331,3 +333,12 @@ async def list_registrations(
 async def cancel_registration(registration_id: RegistrationId, db: DbSession) -> None:
     """Cancel a registration, freeing one seat. Returns 204 on success."""
     await services.cancel_registration(db, registration_id)
+
+
+# ---------------------------------------------------------------------------
+# Optional demo frontend (plain HTML/JS) served at /app
+# ---------------------------------------------------------------------------
+
+FRONTEND_DIR = FilePath(__file__).parent / "frontend"
+if FRONTEND_DIR.is_dir():
+    app.mount("/app", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
