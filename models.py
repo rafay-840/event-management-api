@@ -34,6 +34,24 @@ class TimestampMixin:
     )
 
 
+class User(Base):
+    """An employee account that can log in to manage events."""
+
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    email: Mapped[str] = mapped_column(String(254), unique=True, index=True)
+    full_name: Mapped[str] = mapped_column(String(120))
+    # Only the bcrypt hash is stored, never the password itself.
+    hashed_password: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    def __repr__(self) -> str:
+        return f"<User id={self.id} email={self.email!r}>"
+
+
 class Event(TimestampMixin, Base):
     """A company event such as a workshop, a product launch or a conference."""
 

@@ -17,9 +17,10 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from auth import DUMMY_PASSWORD_HASH, hash_password, verify_password
 from db import settings
-from models import Event, Registration
-from schemas import EventCreate, EventUpdate, RegistrationCreate
+from models import Event, Registration, User
+from schemas import EventCreate, EventUpdate, RegistrationCreate, UserCreate
 
 # ---------------------------------------------------------------------------
 # Domain exceptions
@@ -40,6 +41,24 @@ class NotFoundError(ServiceError):
 
 class ConflictError(ServiceError):
     """The request clashes with the current state of the data (HTTP 409)."""
+
+
+class AuthenticationError(ServiceError):
+    """Credentials are wrong (mapped to HTTP 401)."""
+
+
+class InvalidCredentialsError(AuthenticationError):
+    """Raised on a failed login. The message never says *which* part was wrong."""
+
+    def __init__(self) -> None:
+        super().__init__("Incorrect email or password")
+
+
+class EmailAlreadyRegisteredError(ConflictError):
+    """Raised when signing up with an e-mail that already has an account."""
+
+    def __init__(self, email: str) -> None:
+        super().__init__(f"An account with email {email} already exists")
 
 
 class EventNotFoundError(NotFoundError):
@@ -77,6 +96,50 @@ class CapacityBelowRegistrationsError(ConflictError):
         super().__init__(
             f"max_capacity cannot be {new_capacity}: {registered} employees are already registered"
         )
+
+
+# ---------------------------------------------------------------------------
+# Users
+# ---------------------------------------------------------------------------
+
+
+async def get_user_by_email(db: AsyncSession, email: str) -> User | None:
+    """Return the user with this e-mail, or None."""
+    return await db.scalar(select(User).where(User.email == email.lower()))
+
+
+async def create_user(db: AsyncSession, data: UserCreate) -> User:
+    """Create an account, storing only a hash of the password."""
+    if await get_user_by_email(db, data.email) is not None:
+        raise EmailAlreadyRegisteredError(data.email)
+
+    user = User(
+        email=data.email,
+        full_name=data.full_name,
+        hashed_password=hash_password(data.password),
+    )
+    db.add(user)
+    try:
+        await db.commit()
+    except IntegrityError as exc:  # two sign-ups with the same e-mail at once
+        await db.rollback()
+        raise EmailAlreadyRegisteredError(data.email) from exc
+    await db.refresh(user)
+    return user
+
+
+async def authenticate_user(db: AsyncSession, email: str, password: str) -> User:
+    """Return the user if the credentials are correct, else raise.
+
+    The password is checked even when the e-mail is unknown (against a dummy
+    hash) so both failure cases take the same time.
+    """
+    user = await get_user_by_email(db, email)
+    stored_hash = user.hashed_password if user else DUMMY_PASSWORD_HASH
+    password_ok = verify_password(password, stored_hash)
+    if user is None or not password_ok:
+        raise InvalidCredentialsError()
+    return user
 
 
 # ---------------------------------------------------------------------------
