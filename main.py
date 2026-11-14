@@ -15,9 +15,10 @@ Run with:  ``uvicorn main:app --reload``  then open http://127.0.0.1:8000/docs
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import date
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, Path, Request, status
+from fastapi import Depends, FastAPI, Path, Query, Request, Response, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -65,6 +66,12 @@ RegistrationId = Annotated[int, Path(gt=0, description="The registration's uniqu
 NOT_FOUND = {status.HTTP_404_NOT_FOUND: {"model": ErrorResponse, "description": "Not found"}}
 CONFLICT = {status.HTTP_409_CONFLICT: {"model": ErrorResponse, "description": "Conflict"}}
 
+# Pagination parameters shared by every list endpoint.
+Skip = Annotated[int, Query(ge=0, description="Number of records to skip.")]
+Limit = Annotated[int, Query(ge=1, le=100, description="Maximum records to return (1-100).")]
+
+TOTAL_COUNT_HEADER = "X-Total-Count"
+
 
 # ---------------------------------------------------------------------------
 # Exception handlers: domain exceptions -> HTTP responses
@@ -100,10 +107,37 @@ async def create_event(payload: EventCreate, db: DbSession) -> EventResponse:
     return await services.create_event(db, payload)
 
 
-@app.get("/events", response_model=list[EventResponse], tags=["Events"], summary="List events")
-async def list_events(db: DbSession) -> list[EventResponse]:
-    """Return every event, ordered by date."""
-    return await services.list_events(db)
+@app.get(
+    "/events",
+    response_model=list[EventResponse],
+    tags=["Events"],
+    summary="List, search and filter events",
+)
+async def list_events(
+    response: Response,
+    db: DbSession,
+    skip: Skip = 0,
+    limit: Limit = 10,
+    title: Annotated[
+        str | None,
+        Query(min_length=1, max_length=200, description="Case-insensitive part of the title."),
+    ] = None,
+    event_date: Annotated[
+        date | None,
+        Query(alias="date", description="Only events on this day (YYYY-MM-DD)."),
+    ] = None,
+) -> list[EventResponse]:
+    """Return events ordered by date, one page at a time.
+
+    Filters can be combined with each other and with pagination, e.g.
+    `/events?title=python&date=2026-11-20&skip=0&limit=10`.
+    The total number of matching events is sent in the `X-Total-Count` header.
+    """
+    events, total = await services.list_events(
+        db, skip=skip, limit=limit, title=title, on_date=event_date
+    )
+    response.headers[TOTAL_COUNT_HEADER] = str(total)
+    return events
 
 
 @app.get(
@@ -176,9 +210,22 @@ async def register_for_event(
     tags=["Registrations"],
     summary="List an event's registrations",
 )
-async def list_registrations(event_id: EventId, db: DbSession) -> list[RegistrationResponse]:
-    """Return everyone registered for the event, in registration order."""
-    return await services.list_registrations(db, event_id)
+async def list_registrations(
+    event_id: EventId,
+    response: Response,
+    db: DbSession,
+    skip: Skip = 0,
+    limit: Limit = 10,
+) -> list[RegistrationResponse]:
+    """Return the event's registrations in registration order, one page at a time.
+
+    The total number of registrations is sent in the `X-Total-Count` header.
+    """
+    registrations, total = await services.list_registrations(
+        db, event_id, skip=skip, limit=limit
+    )
+    response.headers[TOTAL_COUNT_HEADER] = str(total)
+    return registrations
 
 
 @app.delete(
