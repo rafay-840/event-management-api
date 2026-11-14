@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     # When True, SQLAlchemy logs every SQL statement (useful while debugging).
     sql_echo: bool = False
 
+    # Time zone used to decide which calendar day an event falls on when
+    # filtering with ``GET /events?date=YYYY-MM-DD`` (IANA name, e.g. Europe/Rome).
+    app_timezone: str = "UTC"
+
 
 settings = Settings()
 

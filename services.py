@@ -10,11 +10,14 @@ a background job or a test without going through FastAPI.
 """
 
 from collections.abc import Sequence
+from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from db import settings
 from models import Event, Registration
 from schemas import EventCreate, EventUpdate, RegistrationCreate
 
@@ -91,10 +94,53 @@ async def create_event(db: AsyncSession, data: EventCreate) -> Event:
     return event
 
 
-async def list_events(db: AsyncSession) -> Sequence[Event]:
-    """Return all events, soonest first."""
-    result = await db.scalars(select(Event).order_by(Event.event_date, Event.id))
-    return result.all()
+def day_bounds(day: date, tz_name: str) -> tuple[datetime, datetime]:
+    """Return the [start, end) instants of a calendar day in the given time zone.
+
+    Comparing ``start <= event_date < end`` (a half-open range) is both
+    correct at midnight and able to use the index on ``event_date``, unlike
+    casting every row with ``DATE(event_date) = ...``.
+    """
+    tz = ZoneInfo(tz_name)
+    start = datetime.combine(day, time.min, tzinfo=tz)
+    return start, start + timedelta(days=1)
+
+
+async def list_events(
+    db: AsyncSession,
+    *,
+    skip: int = 0,
+    limit: int = 10,
+    title: str | None = None,
+    on_date: date | None = None,
+) -> tuple[Sequence[Event], int]:
+    """Return one page of events (soonest first) and the total number of matches.
+
+    Args:
+        skip: how many matching events to skip (offset).
+        limit: maximum number of events to return.
+        title: case-insensitive "contains" filter on the title.
+        on_date: only events taking place on this calendar day.
+    """
+    filters = []
+    if title:
+        # ``icontains`` -> ILIKE '%...%'. ``autoescape`` makes characters such
+        # as % and _ in the user's text match literally, not as wildcards.
+        filters.append(Event.title.icontains(title, autoescape=True))
+    if on_date is not None:
+        start, end = day_bounds(on_date, settings.app_timezone)
+        filters.append(Event.event_date >= start)
+        filters.append(Event.event_date < end)
+
+    total = await db.scalar(select(func.count(Event.id)).where(*filters)) or 0
+    page = await db.scalars(
+        select(Event)
+        .where(*filters)
+        .order_by(Event.event_date, Event.id)  # stable order => stable pages
+        .offset(skip)
+        .limit(limit)
+    )
+    return page.all(), total
 
 
 async def get_event(db: AsyncSession, event_id: int) -> Event:
@@ -197,15 +243,20 @@ async def register_for_event(
     return registration
 
 
-async def list_registrations(db: AsyncSession, event_id: int) -> Sequence[Registration]:
-    """Return the registrations of an existing event, oldest first."""
+async def list_registrations(
+    db: AsyncSession, event_id: int, *, skip: int = 0, limit: int = 10
+) -> tuple[Sequence[Registration], int]:
+    """Return one page of an event's registrations (oldest first) and the total."""
     await get_event(db, event_id)  # raises 404 for an unknown event
+    total = await count_registrations(db, event_id)
     query = (
         select(Registration)
         .where(Registration.event_id == event_id)
         .order_by(Registration.registered_at, Registration.id)
+        .offset(skip)
+        .limit(limit)
     )
-    return (await db.scalars(query)).all()
+    return (await db.scalars(query)).all(), total
 
 
 async def cancel_registration(db: AsyncSession, registration_id: int) -> None:
