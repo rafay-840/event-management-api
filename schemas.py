@@ -20,7 +20,6 @@ from pydantic import (
     EmailStr,
     Field,
     computed_field,
-    field_validator,
     model_validator,
 )
 
@@ -51,6 +50,10 @@ def validate_event_date(value: datetime) -> datetime:
 
 # A datetime type that runs ``validate_event_date`` after normal parsing.
 FutureDatetime = Annotated[datetime, AfterValidator(validate_event_date)]
+
+# A validated e-mail stored in lower case, so "Ana@Acme.com" and
+# "ana@acme.com" are recognised as the same person.
+LowercaseEmail = Annotated[EmailStr, AfterValidator(str.lower)]
 
 
 class StrictModel(BaseModel):
@@ -139,13 +142,7 @@ class RegistrationCreate(StrictModel):
     """
 
     employee_name: str = Field(min_length=1, max_length=120, examples=["Ana Rossi"])
-    employee_email: EmailStr = Field(examples=["ana.rossi@acme.com"])
-
-    @field_validator("employee_email")
-    @classmethod
-    def _lowercase_email(cls, value: str) -> str:
-        """Store e-mails in lower case so duplicates are detected reliably."""
-        return value.lower()
+    employee_email: LowercaseEmail = Field(examples=["ana.rossi@acme.com"])
 
 
 class RegistrationResponse(BaseModel):
@@ -158,6 +155,39 @@ class RegistrationResponse(BaseModel):
     employee_name: str
     employee_email: str
     registered_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# Users & authentication
+# ---------------------------------------------------------------------------
+
+
+class UserCreate(StrictModel):
+    """Request body for ``POST /auth/register``."""
+
+    email: LowercaseEmail = Field(examples=["ana.rossi@acme.com"])
+    full_name: str = Field(min_length=1, max_length=120, examples=["Ana Rossi"])
+    # bcrypt only uses the first 72 bytes of a password, so we cap the length.
+    password: str = Field(min_length=8, max_length=64, examples=["S3cure-pass!"])
+
+
+class UserResponse(BaseModel):
+    """A user as returned by the API (never includes the password hash)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    email: str
+    full_name: str
+    created_at: datetime
+
+
+class Token(BaseModel):
+    """Response of ``POST /auth/login`` (OAuth2 bearer token format)."""
+
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int = Field(description="Token lifetime in seconds.")
 
 
 class ErrorResponse(BaseModel):

@@ -40,6 +40,14 @@ class Settings(BaseSettings):
     # filtering with ``GET /events?date=YYYY-MM-DD`` (IANA name, e.g. Europe/Rome).
     app_timezone: str = "UTC"
 
+    # --- JWT authentication -------------------------------------------------
+    # The secret signs every token: anyone who knows it can forge tokens.
+    # Always override it in .env (generate one with:
+    #   python -c "import secrets; print(secrets.token_urlsafe(32))").
+    jwt_secret_key: str = "dev-only-insecure-secret-change-me-in-env-file"
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 60
+
 
 settings = Settings()
 
@@ -52,6 +60,10 @@ engine = create_async_engine(settings.database_url, echo=settings.sql_echo, pool
 # In async code this matters: an expired attribute would trigger an implicit
 # (synchronous) reload, which is not allowed with AsyncSession.
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
+
+
+# Used by main.py to warn when the default secret is still in use.
+DEFAULT_JWT_SECRET = Settings.model_fields["jwt_secret_key"].default
 
 
 class Base(DeclarativeBase):
